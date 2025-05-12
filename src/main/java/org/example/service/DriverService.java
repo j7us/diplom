@@ -1,5 +1,6 @@
 package org.example.service;
 
+import lombok.RequiredArgsConstructor;
 import org.example.dto.DriverDto;
 import org.example.mapper.DriverMapper;
 import org.example.repository.DriverRepository;
@@ -8,17 +9,15 @@ import org.springframework.stereotype.Service;
 import java.util.List;
 
 @Service
+@RequiredArgsConstructor
 public class DriverService {
     private final DriverRepository driverRepository;
     private final DriverMapper driverMapper;
+    private final EnterpriseService enterpriseService;
 
-    public DriverService(DriverRepository driverRepository, DriverMapper driverMapper) {
-        this.driverRepository = driverRepository;
-        this.driverMapper = driverMapper;
-    }
-
-    public List<DriverDto> getAllDrivers() {
-        return driverMapper.toDtoList(driverRepository.findAll());
+    public List<DriverDto> getAllDrivers(String username) {
+        return driverMapper.toDtoList(
+                driverRepository.findAllByEnterpriseIn(enterpriseService.getAllEnterprise(username)));
     }
 
     public DriverDto getById(Long id) {

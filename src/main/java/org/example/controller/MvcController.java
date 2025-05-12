@@ -54,13 +54,6 @@ public class MvcController {
         return "redirect:/info";
     }
 
-    // Удаление транспортного средства
-    @GetMapping("/deleteVehicle/{id}")
-    public String deleteVehicle(@PathVariable Long id) {
-        vehicleService.deleteById(id);
-        return "redirect:/info";
-    }
-
     // Форма редактирования бренда (возвращает фрагмент для модального окна)
     @GetMapping("/editBrand/{id}")
     public String editBrandForm(@PathVariable Long id, Model model) {

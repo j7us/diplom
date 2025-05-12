@@ -5,6 +5,7 @@ import org.example.entity.DriverVehicle;
 import org.example.entity.Vehicle;
 import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
+import org.mapstruct.MappingTarget;
 import org.mapstruct.Named;
 
 import java.util.List;
@@ -26,4 +27,10 @@ public interface VehicleMapper {
                 .findFirst()
                 .orElse(null);
     }
+
+    @Mapping(target = "id", ignore = true)
+    void updateEntity(VehicleDto dto, @MappingTarget Vehicle vehicle);
+
+    @Mapping(target = "id", ignore = true)
+    Vehicle toEntity(VehicleDto dto);
 }
