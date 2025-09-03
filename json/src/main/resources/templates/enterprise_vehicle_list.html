@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title>Редактирование предприятия</title>
+
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { padding-top:4.5rem; background:#f8f9fa; }
+        .table-responsive { max-height:75vh; }
+    </style>
+</head>
+<body>
+<nav class="navbar navbar-expand-lg navbar-dark bg-primary fixed-top shadow">
+    <div class="container-fluid">
+        <a class="navbar-brand" href="/view/enterprises">← Предприятия</a>
+        <span id="entName" class="navbar-text ms-3 d-none text-light fw-semibold"></span>
+
+        <button id="addVehicleBtn" class="btn btn-success ms-auto">Добавить&nbsp;машину</button>
+        <button id="logoutBtn"     class="btn btn-outline-light ms-2">Выход</button>
+    </div>
+</nav>
+
+<div class="container mt-4">
+    <div class="table-responsive shadow-sm rounded-4 bg-white p-0">
+        <table id="vehiclesTable" class="table table-hover mb-0">
+            <thead class="table-light sticky-top">
+            <tr>
+                <th>ID</th><th>Год&nbsp;выпуска</th><th>Гос-номер</th><th>Пробег</th>
+                <th>Цена</th><th>Бренд</th><th>Водитель</th>
+                <th>Дата&nbsp;производства</th>               <!-- новая колонка -->
+                <th class="text-center">Действия</th>
+            </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
+
+    <nav class="mt-3">
+        <ul id="pager" class="pagination justify-content-center mb-0"></ul>
+    </nav>
+</div>
+
+<!-- ===== Модальное окно ===== -->
+<div id="vehicleModal" class="modal fade" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <form id="vehicleForm">
+                <div class="modal-header">
+                    <h5 id="modalTitle" class="modal-title"></h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+
+                <div class="modal-body">
+                    <input type="hidden" id="vehId">
+                    <div class="row g-3">
+                        <div class="col-4">
+                            <label class="form-label">Год</label>
+                            <input type="number" id="releaseYear" class="form-control" min="1900" max="2100" required>
+                        </div>
+                        <div class="col-8">
+                            <label class="form-label">Гос-номер</label>
+                            <input type="text" id="carNumber" class="form-control" required>
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label">Пробег</label>
+                            <input type="number" id="mileage" class="form-control" min="0" step="1" required>
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label">Цена</label>
+                            <input type="number" step="0.01" id="price" class="form-control" required>
+                        </div>
+
+                        <div class="col-6">
+                            <label class="form-label">Бренд</label>
+                            <select id="brandSelect" class="form-select">
+                                <option value="">— без бренда —</option>
+                            </select>
+                        </div>
+
+                        <div class="col-6">
+                            <label class="form-label">Водитель</label>
+                            <select id="driverSelect" class="form-select">
+                                <option value="">— без водителя —</option>
+                            </select>
+                        </div>
+
+                        <!-- новое поле -->
+                        <div class="col-12">
+                            <label class="form-label">Дата производства</label>
+                            <input type="datetime-local" id="productionDate" class="form-control">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="modal-footer">
+                    <button class="btn btn-primary"  type="submit">Сохранить</button>
+                    <button class="btn btn-secondary" type="button" data-bs-dismiss="modal">Отмена</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" defer></script>
+
+<script defer>
+    /* ---------- глобальные данные ---------- */
+    const token = localStorage.getItem('access_token');
+    if (!token) location.href = '/login';
+
+    const entId = location.pathname.split('/').find(s => /^[0-9a-fA-F-]{36}$/.test(s));
+    const SIZE  = 10;
+    let current = 0, totalPages = 0, vehicleModal;
+    let brands = null, drivers = null;
+
+    const GET = url => fetch(url, { headers:{ Authorization:`Bearer ${token}` } });
+
+    /* ---------- util ---------- */
+    /* форматирование ISO-строки в локальное представление */
+    const fmtLocal = iso =>
+        iso ? new Date(iso).toLocaleString(undefined, { dateStyle:'short', timeStyle:'short' }) : '';
+
+    /* для <input type=\"datetime-local\"> нужно убрать смещение */
+    const toDatetimeLocal = iso => {
+        if (!iso) return '';
+        const d = new Date(iso);
+        d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+        return d.toISOString().slice(0,16); // YYYY-MM-DDTHH:MM
+    };
+
+    /* превращаем строку \"YYYY-MM-DDTHH:MM\" в OffsetDateTime браузера */
+    const toIsoWithOffset = dtLocal => {
+        const offMin = new Date().getTimezoneOffset();    // в минутах
+        const sign   = offMin > 0 ? '-' : '+';
+        const abs    = Math.abs(offMin);
+        const hh     = String(Math.trunc(abs / 60)).padStart(2,'0');
+        const mm     = String(abs % 60).padStart(2,'0');
+        return `${dtLocal}${sign}${hh}:${mm}`;            // 2025-05-29T12:00+03:00
+    };
+
+    /* ---------- справочники ---------- */
+    async function loadLookups() {
+        if (brands) return;
+        const [brRes, drRes] = await Promise.all([GET('/api/v1/brands'), GET('/api/v1/drivers')]);
+        brands  = await brRes.json();
+        drivers = await drRes.json();
+
+        const bSel = document.getElementById('brandSelect');
+        brands.forEach(b => bSel.append(new Option(b.name, b.id)));
+
+        const dSel = document.getElementById('driverSelect');
+        drivers.forEach(d => dSel.append(new Option(d.name, d.id)));
+    }
+
+    /* ---------- пагинация ---------- */
+    function renderPager() {
+        const ul = document.getElementById('pager'); ul.innerHTML='';
+        const add = (lbl,p,dis=false,act=false,ell=false)=>{
+            const li=document.createElement('li');
+            li.className=`page-item${dis?' disabled':''}${act?' active':''}`;
+            const a=document.createElement('a');a.className='page-link';a.textContent=lbl;
+            if(ell)a.style.pointerEvents='none';
+            li.appendChild(a);
+            if(!dis&&!ell) li.onclick=e=>{e.preventDefault();loadVehicles(p);};
+            ul.appendChild(li);
+        };
+        add('«',current-1,current===0);
+        const w=2,s=Math.max(0,current-w),e=Math.min(totalPages-1,current+w);
+        add('1',0,false,current===0); if(s>1) add('…',0,false,false,true);
+        for(let i=s;i<=e;i++){ if(i&&i!==totalPages-1) add(i+1,i,false,current===i); }
+        if(e<totalPages-2) add('…',0,false,false,true);
+        if(totalPages>1)  add(totalPages,totalPages-1,false,current===totalPages-1);
+        add('»',current+1,current===totalPages-1);
+    }
+
+    /* ---------- таблица ---------- */
+    function fillTable(list){
+        const tb=document.querySelector('#vehiclesTable tbody');tb.innerHTML='';
+        list.forEach(v=>{
+            tb.insertAdjacentHTML('beforeend',`
+      <tr>
+        <td>${v.id}</td>
+        <td>${v.releaseYear?.slice(0,4)??''}</td>
+        <td>${v.carNumber}</td>
+        <td>${v.mileage}</td>
+        <td>${v.price}</td>
+        <td>${v.brandName??''}</td>
+        <td>${v.activeDriverName??''}</td>
+        <td>${fmtLocal(v.productionDate)}</td>
+        <td class="text-center">
+          <a href="/view/vehicles/${v.id}" class="btn btn-sm btn-outline-info me-1">ℹ️</a>
+          <button class="btn btn-sm btn-outline-primary me-1" onclick="openEdit('${v.id}')">✎</button>
+          <button class="btn btn-sm btn-outline-danger" onclick="removeVehicle('${v.id}')">🗑</button>
+        </td>
+      </tr>`);
+        });
+    }
+
+    /* ---------- список машин (новый эндпоинт) ---------- */
+    function loadVehicles(page = 0){
+        const url = `/api/v1/vehicles_enter/page?page=${page}&size=${SIZE}&enterpriseId=${entId}`;
+        GET(url)
+            .then(r => { if (r.status === 401) { localStorage.clear(); location.href='/login'; } return r.json(); })
+            .then(d => { current = d.number; totalPages = d.totalPages; fillTable(d.content); renderPager(); });
+    }
+
+    /* ---------- CRUD ---------- */
+    async function openAdd(){
+        await loadLookups();
+        document.getElementById('modalTitle').textContent='Новая машина';
+        document.getElementById('vehicleForm').reset();
+        vehicleModal.show();
+    }
+
+    async function openEdit(id){
+        await loadLookups();
+        GET(`/api/v1/vehicles/${id}`)
+            .then(r=>r.json())
+            .then(v=>{
+                document.getElementById('modalTitle').textContent='Редактирование';
+                document.getElementById('vehId').value       = v.id;
+                document.getElementById('releaseYear').value = v.releaseYear?.slice(0,4)??'';
+                document.getElementById('carNumber').value   = v.carNumber;
+                document.getElementById('mileage').value     = v.mileage;
+                document.getElementById('price').value       = v.price;
+                document.getElementById('brandSelect').value = v.brandId ?? '';
+                document.getElementById('driverSelect').value= v.activeDriverId ?? '';
+                document.getElementById('productionDate').value = toDatetimeLocal(v.productionDate);
+                vehicleModal.show();
+            });
+    }
+
+    function removeVehicle(id){
+        if(!confirm(`Удалить машину #${id}?`)) return;
+        fetch(`/api/v1/vehicles/${id}`,{method:'DELETE',headers:{Authorization:`Bearer ${token}`}})
+            .then(r=>r.ok?loadVehicles(current):alert('Ошибка удаления'));
+    }
+    window.openEdit=openEdit; window.removeVehicle=removeVehicle;
+
+    /* ---------- init ---------- */
+    document.addEventListener('DOMContentLoaded',()=>{
+        vehicleModal = new bootstrap.Modal(document.getElementById('vehicleModal'));
+
+        GET(`/api/v1/enterprises/${entId}`)
+            .then(r=>r.ok?r.json():null)
+            .then(e=>{ if(e?.name){ const s=document.getElementById('entName'); s.textContent=e.name; s.classList.remove('d-none'); }});
+
+        document.getElementById('addVehicleBtn').onclick=openAdd;
+        document.getElementById('logoutBtn').onclick=()=>{ localStorage.clear(); location.href='/login'; };
+
+        document.getElementById('vehicleForm').onsubmit = e => {
+            e.preventDefault();
+            const year = releaseYear.value;
+            const bSel = brandSelect, dSel = driverSelect;
+
+            const dto = {
+                releaseYear      : year ? `${year}-01-01` : null,
+                carNumber        : carNumber.value,
+                mileage          : parseInt(mileage.value,10),
+                price            : parseFloat(price.value),
+                brandId          : bSel.value || null,
+                brandName        : bSel.value ? bSel.options[bSel.selectedIndex].text : null,
+                activeDriverId   : dSel.value || null,
+                activeDriverName : dSel.value ? dSel.options[dSel.selectedIndex].text : null,
+                productionDate   : productionDate.value ? toIsoWithOffset(productionDate.value) : null
+            };
+
+            const id = vehId.value;
+            const url = id ? `/api/v1/vehicles/${id}` : `/api/v1/vehicles/create/${entId}`;
+            const method = id ? 'PUT' : 'POST';
+
+            fetch(url,{
+                method,
+                headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`},
+                body:JSON.stringify(dto)
+            }).then(r=>r.ok?(vehicleModal.hide(), loadVehicles(current)) : alert('Ошибка сохранения'));
+        };
+
+        loadVehicles();
+    });
+</script>
+</body>
+</html>

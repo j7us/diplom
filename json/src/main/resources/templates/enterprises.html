@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title>Предприятия</title>
+
+    <!-- Bootstrap 5 -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+
+    <style>
+        body { padding-top: 4.5rem; background: #f8f9fa; }
+        .table-responsive { max-height: 80vh; }
+    </style>
+</head>
+<body>
+<nav class="navbar navbar-expand-lg navbar-dark bg-primary fixed-top shadow">
+    <div class="container-fluid">
+        <span class="navbar-brand fw-semibold">Предприятия</span>
+
+        <div class="d-flex ms-auto gap-2">
+            <a href="/view/reports" class="btn btn-outline-light">Отчеты</a>
+            <button class="btn btn-outline-light" id="logoutBtn">Выход</button>
+        </div>
+    </div>
+</nav>
+
+<div class="container mt-4">
+    <div class="table-responsive shadow-sm rounded-4 bg-white p-0">
+        <table class="table table-hover mb-0" id="enterprisesTable">
+            <thead class="table-light sticky-top">
+            <tr>
+                <th>ID</th>
+                <th>Название</th>
+                <th>Город</th>
+                <th>Мощность</th>
+                <th>Транспорт</th>
+                <th>Водители</th>
+                <th>Час. пояс</th>
+                <th class="text-center">Действия</th>
+            </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
+
+    <div id="empty" class="alert alert-info mt-3 d-none">Список предприятий пуст</div>
+</div>
+
+<!-- ===== Модальное окно выбора часового пояса ===== -->
+<div class="modal fade" id="tzModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <form id="tzForm">
+                <div class="modal-header">
+                    <h5 class="modal-title">Часовой пояс предприятия</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" id="tzEntId">
+                    <label class="form-label">Выберите часовой пояс</label>
+                    <select id="tzSelect" class="form-select" required></select>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-primary" type="submit">Сохранить</button>
+                    <button class="btn btn-secondary" type="button" data-bs-dismiss="modal">Отмена</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
+<script>
+    /* ---------- JWT check ---------- */
+    const token = localStorage.getItem('access_token');
+    if (!token) location.href = '/login';
+
+    /* ---------- список UTC offset-ов (UTC±HH:MM) ---------- */
+    const tzOffsets = [
+        '-12:00','-11:00','-10:00','-09:30','-09:00','-08:00','-07:00','-06:00','-05:00','-04:00',
+        '-03:30','-03:00','-02:00','-01:00','+00:00','+01:00','+02:00','+03:00','+03:30','+04:00',
+        '+04:30','+05:00','+05:30','+05:45','+06:00','+06:30','+07:00','+08:00','+08:45','+09:00',
+        '+09:30','+10:00','+10:30','+11:00','+12:00','+12:45','+13:00','+14:00'
+    ];
+
+    /* ---------- заполняем селект часовых поясов ---------- */
+    const tzSelect = document.getElementById('tzSelect');
+    tzOffsets.forEach(off => tzSelect.add(new Option(`UTC${off}`, `UTC${off}`)));
+
+    /* ---------- загрузка предприятий ---------- */
+    async function loadEnterprises() {
+        try {
+            const resp = await fetch('/api/v1/enterprises', { headers:{ Authorization:`Bearer ${token}` } });
+
+            if (resp.status === 401) { localStorage.clear(); location.href='/login'; return; }
+
+            const enterprises = await resp.json();
+            const tbody = document.querySelector('#enterprisesTable tbody');
+            tbody.innerHTML = '';
+
+            if (!enterprises.length) {
+                document.getElementById('empty').classList.remove('d-none');
+                return;
+            }
+
+            enterprises.forEach(e => {
+                const vehicles = (e.vehiclesId || []).join(', ') || '—';
+                const drivers  = (e.driversId  || []).join(', ') || '—';
+
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+      <th>${e.id}</th>
+      <td>${e.name}</td>
+      <td>${e.city ?? ''}</td>
+      <td>${e.productionCapacity ?? ''}</td>
+      <td>${vehicles}</td>
+      <td>${drivers}</td>
+      <td id="tz-${e.id}">${e.zone ?? '—'}</td>
+      <td class="text-center">
+        <a href="/view/enterprises/${e.id}/veh_list" class="btn btn-sm btn-outline-primary me-1">
+            Машины
+        </a>
+        <button class="btn btn-sm btn-outline-secondary" onclick="openTzModal('${e.id}', '${e.zone ?? ''}')">
+            ✎ Час.пояс
+        </button>
+      </td>`;
+                tbody.appendChild(tr);
+            });
+        } catch (err) {
+            console.error(err);
+            alert('Не удалось загрузить предприятия');
+        }
+    }
+
+    /* ---------- модальное окно ---------- */
+    const tzModal = new bootstrap.Modal(document.getElementById('tzModal'));
+
+    function openTzModal(id, currentZone) {
+        document.getElementById('tzEntId').value = id;
+        tzSelect.value = currentZone || '';
+        tzModal.show();
+    }
+
+    document.getElementById('tzForm').addEventListener('submit', async e => {
+        e.preventDefault();
+        const id  = document.getElementById('tzEntId').value;
+        const val = tzSelect.value;
+
+        try {
+            /* PATCH /api/v1/enterprises/{id}/zone  — частичное обновление поля zone */
+            const resp = await fetch(`/api/v1/enterprises/${id}/zone`, {
+                method : 'PATCH',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Authorization : `Bearer ${token}`
+                },
+                body: JSON.stringify({ zone: val })
+            });
+
+            if (!resp.ok) throw new Error('bad status');
+
+            document.getElementById(`tz-${id}`).textContent = val; // обновляем ячейку
+            tzModal.hide();
+        } catch (err) {
+            console.error(err);
+            alert('Не удалось сохранить часовой пояс');
+        }
+    });
+
+    /* ---------- init ---------- */
+    loadEnterprises();
+
+    /* ---------- logout ---------- */
+    document.getElementById('logoutBtn').onclick = () => {
+        localStorage.clear();
+        location.href = '/login';
+    };
+</script>
+</body>
+</html>

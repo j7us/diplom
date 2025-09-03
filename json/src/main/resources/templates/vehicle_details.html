@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title>Детали машины</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { padding-top: 4.5rem; background: #f8f9fa; }
+        .card { margin-top: 20px; }
+        .table-responsive { max-height: 60vh; }
+        #map { height: 400px; margin-top: 20px; border-radius: 8px; }
+    </style>
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.css" />
+
+    <!-- Leaflet JS (основа, должна быть раньше всех дополнений) -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <!-- Leaflet Routing Machine (только после Leaflet, без defer) -->
+    <script src="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.min.js"></script>
+
+
+</head>
+<body>
+<nav class="navbar navbar-expand-lg navbar-dark bg-primary fixed-top shadow">
+    <div class="container-fluid">
+        <a class="navbar-brand" href="javascript:history.back()">← Назад</a>
+        <span id="vehicleTitle" class="navbar-text ms-3 d-none text-light fw-semibold"></span>
+        <button id="logoutBtn" class="btn btn-outline-light ms-auto">Выход</button>
+    </div>
+</nav>
+
+<div class="container mt-4">
+    <div class="card shadow-sm rounded-4 bg-white">
+        <div class="card-header bg-white">
+            <h5 class="card-title mb-0">Информация о машине</h5>
+        </div>
+        <div class="card-body p-0">
+            <table class="table mb-0">
+                <tbody>
+                    <tr>
+                        <th scope="row" class="w-25">ID</th>
+                        <td id="vehicleId">-</td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Год выпуска</th>
+                        <td id="releaseYear">-</td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Гос-номер</th>
+                        <td id="carNumber">-</td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Пробег</th>
+                        <td id="mileage">-</td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Цена</th>
+                        <td id="price">-</td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Бренд</th>
+                        <td id="brandName">-</td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Водитель</th>
+                        <td id="activeDriverName">-</td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Дата производства</th>
+                        <td id="productionDate">-</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="card shadow-sm rounded-4 bg-white mt-4">
+        <div class="card-header bg-white">
+            <h5 class="card-title mb-0">Поездки</h5>
+            <div class="row mt-2">
+                <div class="col-md-6">
+                    <label for="dateFrom" class="form-label">Дата начала:</label>
+                    <input type="date" id="dateFrom" class="form-control">
+                </div>
+                <div class="col-md-6">
+                    <label for="dateTo" class="form-label">Дата окончания:</label>
+                    <input type="date" id="dateTo" class="form-control">
+                </div>
+            </div>
+            <button id="fetchTripsBtn" class="btn btn-primary mt-2">Обновить поездки</button>
+            <button id="showRoutesBtn" class="btn btn-success mt-2" style="display: none;">Показать маршруты</button>
+            <div class="mt-2">
+                <label for="gpxFile" class="form-label">Загрузить GPX файл:</label>
+                <input type="file" id="gpxFile" class="form-control" accept=".xml,.gpx">
+                <button id="uploadGpxBtn" class="btn btn-warning mt-2">Загрузить GPX</button>
+            </div>
+        </div>
+        <div class="card-body p-0 table-responsive">
+            <table id="tripsTable" class="table table-hover mb-0">
+                <thead class="table-light sticky-top">
+                    <tr>
+                        <th>Выбрать</th>
+                        <th>Начало</th>
+                        <th>Конец</th>
+                        <th>Начало адреса</th>
+                        <th>Конец адреса</th>
+                    </tr>
+                </thead>
+                <tbody id="tripsBody">
+                    <!-- Trips will be populated here -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="card shadow-sm rounded-4 bg-white mt-4">
+        <div class="card-header bg-white">
+            <h5 class="card-title mb-0">Маршруты поездок</h5>
+        </div>
+        <div class="card-body p-0">
+            <div id="map"></div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" defer></script>
+
+<script defer>
+    const token = localStorage.getItem('access_token');
+    if (!token) location.href = '/login';
+
+    const GET = url => fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+
+    /* форматирование ISO-строки в локальное представление */
+    const fmtLocal = iso =>
+        iso ? new Date(iso)
+                .toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })
+            : '-';
+
+    // Function to fetch vehicle details
+    async function fetchVehicleDetails(vehicleId) {
+        try {
+            const response = await GET(`/api/v1/vehicles/${vehicleId}`);
+            if (!response.ok) {
+                if (response.status === 401) {
+                    localStorage.clear();
+                    location.href = '/login';
+                }
+                throw new Error('Network response was not ok');
+            }
+            return await response.json();
+        } catch (error) {
+            console.error('Error fetching vehicle details:', error);
+            return null;
+        }
+    }
+
+    // Function to fetch trips for the vehicle within the selected date range
+    async function fetchTrips(vehicleId) {
+        try {
+            const dateFromInput = document.getElementById('dateFrom').value;
+            const dateToInput = document.getElementById('dateTo').value;
+            const dateFrom = dateFromInput ? `${dateFromInput}T00:00:00` : new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0] + 'T00:00:00';
+            const dateTo = dateToInput ? `${dateToInput}T23:59:59` : new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).toISOString().split('T')[0] + 'T23:59:59';
+            const response = await GET(`/api/v1/vehicles/${vehicleId}/trips?date_from=${dateFrom}&date_to=${dateTo}`);
+            if (!response.ok) {
+                if (response.status === 401) {
+                    localStorage.clear();
+                    location.href = '/login';
+                }
+                throw new Error('Network response was not ok');
+            }
+            return await response.json();
+        } catch (error) {
+            console.error('Error fetching trips:', error);
+            alert('Ошибка при загрузке поездок. Пожалуйста, попробуйте снова.');
+            return [];
+        }
+    }
+
+    // Function to populate vehicle details
+    function populateVehicleDetails(vehicle) {
+        if (!vehicle) return;
+        document.getElementById('vehicleId').textContent = vehicle.id || '-';
+        document.getElementById('releaseYear').textContent = vehicle.releaseYear?.slice(0, 4) || '-';
+        document.getElementById('carNumber').textContent = vehicle.carNumber || '-';
+        document.getElementById('mileage').textContent = vehicle.mileage || '-';
+        document.getElementById('price').textContent = vehicle.price || '-';
+        document.getElementById('brandName').textContent = vehicle.brandName || '-';
+        document.getElementById('activeDriverName').textContent = vehicle.activeDriverName || '-';
+        document.getElementById('productionDate').textContent = fmtLocal(vehicle.productionDate);
+        document.getElementById('vehicleTitle').textContent = `Машина #${vehicle.id}`;
+        document.getElementById('vehicleTitle').classList.remove('d-none');
+    }
+
+    // Function to populate trips table with checkboxes
+    function populateTrips(trips) {
+        const tbody = document.getElementById('tripsBody');
+        tbody.innerHTML = '';
+        if (trips.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="5" class="text-center">Нет данных о поездках</td></tr>`;
+            return;
+        }
+        trips.forEach(trip => {
+            const row = document.createElement('tr');
+            row.innerHTML = `
+                <td><input type="checkbox" class="trip-select" data-trip-id="${trip.id}"></td>
+                <td>${fmtLocal(trip.startDate)}</td>
+                <td>${fmtLocal(trip.endDate)}</td>
+                <td>${trip.startAddress || '-'}</td>
+                <td>${trip.endAddress || '-'}</td>
+            `;
+            tbody.appendChild(row);
+        });
+        updateShowRoutesButton();
+    }
+    
+    // Function to update visibility of "Show Routes" button
+    function updateShowRoutesButton() {
+        const checkboxes = document.querySelectorAll('.trip-select');
+        const showRoutesBtn = document.getElementById('showRoutesBtn');
+        showRoutesBtn.style.display = checkboxes.length > 0 ? 'block' : 'none';
+    }
+
+    let map;
+    let routeLayers = [];
+
+    // Function to initialize Leaflet map
+    function initMap() {
+        map = L.map('map').setView([55.7558, 37.6173], 10); // Default to Moscow
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+            errorTileUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQYV2NgAAIAAAUAAarVyFEAAAAASUVORK5CYII=',
+            tileErrorHandler: function(tile, error) {
+                console.warn('Tile loading issue detected, attempting fallback:', error);
+                // Fallback to a different tile provider if possible
+                tile.src = 'https://tile.openstreetmap.bzh/br/{z}/{x}/{y}.png';
+            }
+        }).addTo(map).on('tileerror', function(error, tile) {
+            console.warn('Tile error event triggered, handled by fallback:', error, tile);
+        });
+    }
+
+    function clearRoutes() {
+        routeLayers.forEach(layer => map.removeLayer(layer));
+        routeLayers = [];
+    }
+
+    function displayRoutes(tripsWithRoutes) {
+        clearRoutes();
+        const colors = ['#FF0000', '#00FF00', '#0000FF', '#FFFF00', '#FF00FF', '#00FFFF'];
+
+        tripsWithRoutes.forEach((trip, index) => {
+            const points = trip.point;
+            if (points && points.length > 1) {
+                const color = colors[index % colors.length];
+
+                const waypoints = points.map(p => L.latLng(parseFloat(p.latitude), parseFloat(p.longitude)));
+
+                const routingControl = L.Routing.control({
+                    waypoints: waypoints,
+                    lineOptions: {
+                        styles: [{ color: color, weight: 5, opacity: 0.8 }]
+                    },
+                    createMarker: function (i, wp, nWps) {
+                        if (i === 0) {
+                            return L.marker(wp.latLng).bindPopup(`Начало поездки ID: ${trip.tripId}<br>${fmtLocal(points[0].dateTime)}`);
+                        } else if (i === nWps - 1) {
+                            return L.marker(wp.latLng).bindPopup(`Конец поездки ID: ${trip.tripId}<br>${fmtLocal(points[points.length - 1].dateTime)}`);
+                        } else {
+                            return null; // не показываем промежуточные точки
+                        }
+                    },
+                    addWaypoints: false,
+                    draggableWaypoints: false,
+                    fitSelectedRoutes: false,
+                    show: false
+                }).addTo(map);
+
+                routeLayers.push(routingControl);
+            }
+        });
+
+        if (routeLayers.length > 0) {
+            const allPoints = tripsWithRoutes.flatMap(trip =>
+                trip.point.map(p => [parseFloat(p.latitude), parseFloat(p.longitude)])
+            );
+            const bounds = L.latLngBounds(allPoints);
+            map.fitBounds(bounds);
+        }
+    }
+
+
+
+    // Function to fetch full route data for selected trips
+    async function fetchTripsWithRoutes(vehicleId, tripIds) {
+        try {
+            const response = await fetch(`/api/v1/vehicles/${vehicleId}/tripsfull`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(tripIds)
+            });
+            if (!response.ok) {
+                if (response.status === 401) {
+                    localStorage.clear();
+                    location.href = '/login';
+                }
+                throw new Error('Network response was not ok');
+            }
+            return await response.json();
+        } catch (error) {
+            console.error('Error fetching trips with routes:', error);
+            alert('Ошибка при загрузке маршрутов поездок. Пожалуйста, попробуйте снова.');
+            return [];
+        }
+    }
+
+    // Main function to initialize the page
+    async function init() {
+        const pathSegments = window.location.pathname.split('/');
+        const vehicleId = pathSegments[pathSegments.length - 1];
+        if (vehicleId && /^[0-9a-fA-F-]{36}$/.test(vehicleId)) {
+            const vehicle = await fetchVehicleDetails(vehicleId);
+            populateVehicleDetails(vehicle);
+
+            // Установка дат
+            const now = new Date();
+            const firstDayOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+            const lastDayOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0];
+            document.getElementById('dateFrom').value = firstDayOfMonth;
+            document.getElementById('dateTo').value = lastDayOfMonth;
+
+            const trips = await fetchTrips(vehicleId);
+            populateTrips(trips);
+
+            initMap();
+
+            document.getElementById('fetchTripsBtn').addEventListener('click', async () => {
+                const updatedTrips = await fetchTrips(vehicleId);
+                populateTrips(updatedTrips);
+            });
+
+            document.getElementById('showRoutesBtn').addEventListener('click', async () => {
+                const checkboxes = document.querySelectorAll('.trip-select:checked');
+                const selectedTripIds = Array.from(checkboxes).map(cb => cb.dataset.tripId);
+                if (selectedTripIds.length > 0) {
+                    const tripsWithRoutes = await fetchTripsWithRoutes(vehicleId, selectedTripIds);
+                    displayRoutes(tripsWithRoutes);
+                } else {
+                    alert('Пожалуйста, выберите хотя бы одну поездку для отображения маршрута.');
+                }
+            });
+
+            document.getElementById('tripsBody').addEventListener('change', updateShowRoutesButton);
+
+            document.getElementById('uploadGpxBtn').addEventListener('click', async () => {
+                const fileInput = document.getElementById('gpxFile');
+                const file = fileInput.files[0];
+                if (!file) {
+                    alert('Пожалуйста, выберите файл для загрузки.');
+                    return;
+                }
+
+                const formData = new FormData();
+                formData.append('file', file);
+
+                try {
+                    const response = await fetch(`/api/v1/vehicles/${vehicleId}/gpx/upload`, {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${token}`
+                        },
+                        body: formData
+                    });
+
+                    if (!response.ok) {
+                        if (response.status === 401) {
+                            localStorage.clear();
+                            location.href = '/login';
+                        }
+                        if (response.status === 400) {
+                            const errorText = await response.text();
+                            alert(errorText);
+                            return;
+                        }
+                        throw new Error('Network response was not ok');
+                    }
+
+                    alert('GPX файл успешно загружен!');
+                    fileInput.value = '';
+                } catch (error) {
+                    console.error('Error uploading GPX file:', error);
+                    alert('Ошибка при загрузке GPX файла. Пожалуйста, попробуйте снова.');
+                }
+            });
+        } else {
+            console.error('No valid vehicle ID (UUID) provided in URL path');
+        }
+    }
+
+    // Logout function
+    document.getElementById('logoutBtn').onclick = () => {
+        localStorage.clear();
+        location.href = '/login';
+    };
+
+    // Run initialization when the page loads
+    document.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>
