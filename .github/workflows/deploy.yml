@@ -25,10 +25,11 @@ jobs:
             if [ ! -d "diplom" ]; then
               # Если нет, клонируем репозиторий
               git clone https://github.com/${{ github.repository }}.git diplom
-              cd diplom
-            else
-              # Если да, просто обновляем код
-              cd diplom
+            fi
+            
+            cd diplom
+            
+            git pull origin master
               
-              chmod +x ./scripts/deploy.sh
-              ./scripts/deploy.sh
+            chmod +x ./scripts/deploy.sh
+            ./scripts/deploy.sh
