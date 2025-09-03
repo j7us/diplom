@@ -21,6 +21,8 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
+            pwd
+            ls -la
             # Проверяем, существует ли директория проекта
             if [ ! -d "diplom" ]; then
               # Если нет, клонируем репозиторий
