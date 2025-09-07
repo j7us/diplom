@@ -29,7 +29,3 @@ echo "Конец в:"
 date
 
 echo "✅ Deployment finished successfully!"
-
-22:43:23 -
-
-22:44:50 - 22:45:00
